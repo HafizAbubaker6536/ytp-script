@@ -275,28 +275,43 @@
         }
     };
 
-    // Process thumbnails
+    // Process thumbnails based on enhancement setting
     async function processThumbnails(videoId) {
-        const thumbnailSizes = [
-            { name: '8K Ultra Pro', width: 7680, height: 4320, quality: 'maxresdefault', pro: true, ultra: true },
-            { name: '5K Pro', width: 5120, height: 2880, quality: 'maxresdefault', pro: true },
-            { name: '4K Ultra HD', width: 3840, height: 2160, quality: 'maxresdefault', pro: true },
-            { name: '2K QHD', width: 2560, height: 1440, quality: 'maxresdefault' },
-            { name: 'Full HD 1080p', width: 1920, height: 1080, quality: 'maxresdefault' },
-            { name: 'HD 720p', width: 1280, height: 720, quality: 'hqdefault' },
-            { name: 'SD 480p', width: 640, height: 480, quality: 'sddefault' },
-            { name: 'Standard 360p', width: 480, height: 360, quality: 'hqdefault' },
-            { name: 'Low 240p', width: 320, height: 240, quality: 'mqdefault' },
-            { name: 'Minimum 144p', width: 256, height: 144, quality: 'default' }
-        ];
+        const enhance8K = document.getElementById('ytp-smooth-8k')?.checked || false;
+        
+        let thumbnailSizes;
+        
+        if (enhance8K) {
+            // Pro versions only - 8K Enhancement enabled
+            thumbnailSizes = [
+                { name: '8K Ultra Pro', width: 7680, height: 4320, quality: 'maxresdefault', pro: true },
+                { name: '5K Pro', width: 5120, height: 2880, quality: 'maxresdefault', pro: true },
+                { name: '4K Pro', width: 3840, height: 2160, quality: 'maxresdefault', pro: true },
+                { name: '2K Pro', width: 2560, height: 1440, quality: 'maxresdefault', pro: true },
+                { name: '1080p Pro', width: 1920, height: 1080, quality: 'maxresdefault', pro: true },
+                { name: '720p Pro', width: 1280, height: 720, quality: 'hqdefault', pro: true },
+                { name: '480p Pro', width: 640, height: 480, quality: 'sddefault', pro: true },
+                { name: '360p Pro', width: 480, height: 360, quality: 'hqdefault', pro: true },
+                { name: '240p Pro', width: 320, height: 240, quality: 'mqdefault', pro: true },
+                { name: '144p Pro', width: 256, height: 144, quality: 'default', pro: true }
+            ];
+        } else {
+            // Normal versions only - up to 1080p, no black bar removal for 1080p
+            thumbnailSizes = [
+                { name: '1080p', width: 1920, height: 1080, quality: 'maxresdefault', normal: true, noBlackBarRemoval: true },
+                { name: '720p', width: 1280, height: 720, quality: 'hqdefault', normal: true },
+                { name: '480p', width: 640, height: 480, quality: 'sddefault', normal: true },
+                { name: '360p', width: 480, height: 360, quality: 'hqdefault', normal: true },
+                { name: '240p', width: 320, height: 240, quality: 'mqdefault', normal: true },
+                { name: '144p', width: 256, height: 144, quality: 'default', normal: true }
+            ];
+        }
 
         const grid = document.getElementById('ytp-thumbnails-grid');
         if (!grid) return;
 
         grid.innerHTML = '';
         updateProgress(0, 'Initializing thumbnail extraction...');
-
-        const enhance8K = document.getElementById('ytp-smooth-8k')?.checked || false;
 
         for (let i = 0; i < thumbnailSizes.length; i++) {
             const size = thumbnailSizes[i];
@@ -308,29 +323,18 @@
                 const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/${size.quality}.jpg`;
                 
                 let processedImageData;
-                if (size.pro && enhance8K) {
-                    // Enhanced processing for Pro versions
-                    processedImageData = await enhanceImage(thumbnailUrl, size.width, size.height, {
-                        removeBlackBars: true,
-                        enhanceQuality: true,
-                        upscale: true,
-                        sharpen: true,
-                        adjustColors: true
-                    });
-                } else if (enhance8K) {
-                    // Basic enhancement
-                    processedImageData = await enhanceImage(thumbnailUrl, size.width, size.height, {
-                        removeBlackBars: true,
-                        enhanceQuality: false,
-                        upscale: false
-                    });
+                
+                if (size.pro) {
+                    // Pro processing with all enhancements
+                    processedImageData = await enhanceImagePro(thumbnailUrl, size.width, size.height);
                 } else {
-                    // No enhancement
-                    processedImageData = await loadImage(thumbnailUrl);
+                    // Normal processing
+                    const removeBlackBars = !size.noBlackBarRemoval;
+                    processedImageData = await processImageNormal(thumbnailUrl, removeBlackBars);
                 }
 
                 if (processedImageData) {
-                    createThumbnailCard(size, processedImageData, videoId, enhance8K);
+                    createThumbnailCard(size, processedImageData, videoId);
                 }
             } catch (error) {
                 console.warn(`Failed to process ${size.name}:`, error);
@@ -344,8 +348,8 @@
         showResults();
     }
 
-    // Enhanced image processing
-    async function enhanceImage(imageUrl, targetWidth, targetHeight, options = {}) {
+    // Enhanced Pro image processing with focus on clarity
+    async function enhanceImagePro(imageUrl, targetWidth, targetHeight) {
         return new Promise((resolve, reject) => {
             const img = new Image();
             img.crossOrigin = 'anonymous';
@@ -359,13 +363,73 @@
                     const ctx = processingCanvas.getContext('2d');
                     const tempCtx = tempCanvas.getContext('2d');
                     
-                    let sourceWidth = img.width;
-                    let sourceHeight = img.height;
+                    // Remove black bars first
+                    const blackBarResult = removeBlackBars(img, tempCtx);
+                    let sourceX = blackBarResult.x;
+                    let sourceY = blackBarResult.y;
+                    let sourceWidth = blackBarResult.width;
+                    let sourceHeight = blackBarResult.height;
+
+                    // Calculate optimal dimensions maintaining aspect ratio
+                    const aspectRatio = sourceWidth / sourceHeight;
+                    let finalWidth = targetWidth;
+                    let finalHeight = Math.round(targetWidth / aspectRatio);
+                    
+                    if (finalHeight > targetHeight) {
+                        finalHeight = targetHeight;
+                        finalWidth = Math.round(targetHeight * aspectRatio);
+                    }
+
+                    // Set canvas size
+                    processingCanvas.width = finalWidth;
+                    processingCanvas.height = finalHeight;
+
+                    // Enable high-quality image smoothing
+                    ctx.imageSmoothingEnabled = true;
+                    ctx.imageSmoothingQuality = 'high';
+
+                    // Draw the image with careful upscaling
+                    ctx.drawImage(img, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, finalWidth, finalHeight);
+
+                    // Apply Pro enhancements focused on clarity
+                    applyProEnhancements(ctx, finalWidth, finalHeight);
+
+                    // Convert to blob with maximum quality
+                    processingCanvas.toBlob(resolve, 'image/jpeg', 0.98);
+                    
+                } catch (error) {
+                    console.error('Error enhancing Pro image:', error);
+                    reject(error);
+                }
+            };
+
+            img.onerror = () => reject(new Error('Failed to load image'));
+            img.src = imageUrl;
+        });
+    }
+
+    // Normal image processing
+    async function processImageNormal(imageUrl, removeBlackBars = true) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            
+            img.onload = function() {
+                try {
+                    if (!processingCanvas || !tempCanvas) {
+                        createCanvasElements();
+                    }
+
+                    const ctx = processingCanvas.getContext('2d');
+                    const tempCtx = tempCanvas.getContext('2d');
+                    
                     let sourceX = 0;
                     let sourceY = 0;
+                    let sourceWidth = img.width;
+                    let sourceHeight = img.height;
 
                     // Remove black bars if enabled
-                    if (options.removeBlackBars) {
+                    if (removeBlackBars) {
                         const blackBarResult = removeBlackBars(img, tempCtx);
                         sourceX = blackBarResult.x;
                         sourceY = blackBarResult.y;
@@ -373,45 +437,18 @@
                         sourceHeight = blackBarResult.height;
                     }
 
-                    // Calculate optimal dimensions
-                    const aspectRatio = sourceWidth / sourceHeight;
-                    let finalWidth = targetWidth;
-                    let finalHeight = targetHeight;
+                    // Set canvas size to original dimensions
+                    processingCanvas.width = sourceWidth;
+                    processingCanvas.height = sourceHeight;
 
-                    if (options.upscale && (sourceWidth < targetWidth || sourceHeight < targetHeight)) {
-                        if (aspectRatio > (targetWidth / targetHeight)) {
-                            finalHeight = Math.round(targetWidth / aspectRatio);
-                        } else {
-                            finalWidth = Math.round(targetHeight * aspectRatio);
-                        }
-                    } else {
-                        finalWidth = sourceWidth;
-                        finalHeight = sourceHeight;
-                    }
+                    // Draw the image without upscaling
+                    ctx.drawImage(img, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
 
-                    // Set canvas size
-                    processingCanvas.width = finalWidth;
-                    processingCanvas.height = finalHeight;
-
-                    // Enable image smoothing for better quality
-                    ctx.imageSmoothingEnabled = true;
-                    ctx.imageSmoothingQuality = 'high';
-
-                    // Draw the image
-                    ctx.drawImage(img, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, finalWidth, finalHeight);
-
-                    // Apply enhancements
-                    if (options.enhanceQuality) {
-                        applyImageEnhancements(ctx, finalWidth, finalHeight, {
-                            sharpen: options.sharpen,
-                            adjustColors: options.adjustColors
-                        });
-                    }
-
-                    // Convert to blob with high quality
-                    processingCanvas.toBlob(resolve, 'image/jpeg', 0.95);
+                    // Convert to blob with good quality
+                    processingCanvas.toBlob(resolve, 'image/jpeg', 0.92);
+                    
                 } catch (error) {
-                    console.error('Error enhancing image:', error);
+                    console.error('Error processing normal image:', error);
                     reject(error);
                 }
             };
@@ -436,7 +473,7 @@
         let leftBlackBars = 0;
         let rightBlackBars = 0;
 
-        const threshold = 30; // Threshold for considering a pixel "black"
+        const threshold = 35; // Threshold for considering a pixel "black"
 
         // Detect top black bars
         for (let y = 0; y < img.height; y++) {
@@ -526,125 +563,75 @@
         };
     }
 
-    // Apply image enhancements
-    function applyImageEnhancements(ctx, width, height, options) {
+    // Apply Pro enhancements focused on image clarity
+    function applyProEnhancements(ctx, width, height) {
         const imageData = ctx.getImageData(0, 0, width, height);
         const data = imageData.data;
 
-        if (options.adjustColors) {
-            // Adjust brightness, contrast, and saturation
-            for (let i = 0; i < data.length; i += 4) {
-                let r = data[i];
-                let g = data[i + 1];
-                let b = data[i + 2];
+        // Gentle brightness and contrast enhancement to maintain natural colors
+        for (let i = 0; i < data.length; i += 4) {
+            let r = data[i];
+            let g = data[i + 1];
+            let b = data[i + 2];
 
-                // Brightness boost (+10%)
-                r = Math.min(255, r * 1.1);
-                g = Math.min(255, g * 1.1);
-                b = Math.min(255, b * 1.1);
+            // Subtle brightness boost (5%)
+            r = Math.min(255, r * 1.05);
+            g = Math.min(255, g * 1.05);
+            b = Math.min(255, b * 1.05);
 
-                // Contrast enhancement
-                r = Math.min(255, Math.max(0, ((r - 128) * 1.15) + 128));
-                g = Math.min(255, Math.max(0, ((g - 128) * 1.15) + 128));
-                b = Math.min(255, Math.max(0, ((b - 128) * 1.15) + 128));
+            // Gentle contrast enhancement
+            r = Math.min(255, Math.max(0, ((r - 128) * 1.08) + 128));
+            g = Math.min(255, Math.max(0, ((g - 128) * 1.08) + 128));
+            b = Math.min(255, Math.max(0, ((b - 128) * 1.08) + 128));
 
-                // Saturation boost
-                const max = Math.max(r, g, b);
-                const min = Math.min(r, g, b);
-                const delta = max - min;
-                const sum = max + min;
-                const lightness = sum / 2;
-
-                if (delta !== 0) {
-                    const saturation = lightness > 127.5 ? delta / (510 - sum) : delta / sum;
-                    const newSaturation = Math.min(1, saturation * 1.2);
-                    const c = (255 - Math.abs(2 * lightness - 255)) * newSaturation;
-                    const x = c * (1 - Math.abs(((max === r ? (g - b) / delta : max === g ? 2 + (b - r) / delta : 4 + (r - g) / delta) % 6) - 3) / 3);
-                    const m = lightness - c / 2;
-
-                    if (max === r) {
-                        r = c + m;
-                        g = x + m;
-                        b = m;
-                    } else if (max === g) {
-                        r = x + m;
-                        g = c + m;
-                        b = m;
-                    } else {
-                        r = m;
-                        g = x + m;
-                        b = c + m;
-                    }
-                }
-
-                data[i] = Math.round(r);
-                data[i + 1] = Math.round(g);
-                data[i + 2] = Math.round(b);
-            }
+            data[i] = Math.round(r);
+            data[i + 1] = Math.round(g);
+            data[i + 2] = Math.round(b);
         }
 
-        if (options.sharpen) {
-            // Apply unsharp mask for sharpening
-            const sharpenedData = new Uint8ClampedArray(data);
-            const kernel = [
-                [0, -1, 0],
-                [-1, 5, -1],
-                [0, -1, 0]
-            ];
-
-            for (let y = 1; y < height - 1; y++) {
-                for (let x = 1; x < width - 1; x++) {
-                    for (let c = 0; c < 3; c++) {
-                        let sum = 0;
-                        for (let ky = -1; ky <= 1; ky++) {
-                            for (let kx = -1; kx <= 1; kx++) {
-                                const pixelIndex = ((y + ky) * width + (x + kx)) * 4 + c;
-                                sum += data[pixelIndex] * kernel[ky + 1][kx + 1];
-                            }
-                        }
-                        const index = (y * width + x) * 4 + c;
-                        sharpenedData[index] = Math.min(255, Math.max(0, sum));
-                    }
-                }
-            }
-            
-            // Copy sharpened data back
-            for (let i = 0; i < data.length; i += 4) {
-                data[i] = sharpenedData[i];
-                data[i + 1] = sharpenedData[i + 1];
-                data[i + 2] = sharpenedData[i + 2];
-            }
-        }
-
+        // Apply subtle sharpening for clarity
+        applySharpeningFilter(data, width, height);
+        
         ctx.putImageData(imageData, 0, 0);
     }
 
-    // Load image without enhancement
-    async function loadImage(imageUrl) {
-        return new Promise((resolve, reject) => {
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            
-            img.onload = function() {
-                if (!processingCanvas) {
-                    createCanvasElements();
-                }
-                
-                const ctx = processingCanvas.getContext('2d');
-                processingCanvas.width = img.width;
-                processingCanvas.height = img.height;
-                
-                ctx.drawImage(img, 0, 0);
-                processingCanvas.toBlob(resolve, 'image/jpeg', 0.95);
-            };
+    // Gentle sharpening filter that preserves colors
+    function applySharpeningFilter(data, width, height) {
+        const sharpenedData = new Uint8ClampedArray(data);
+        
+        // Gentle sharpening kernel
+        const kernel = [
+            [0, -0.3, 0],
+            [-0.3, 2.2, -0.3],
+            [0, -0.3, 0]
+        ];
 
-            img.onerror = () => reject(new Error('Failed to load image'));
-            img.src = imageUrl;
-        });
+        for (let y = 1; y < height - 1; y++) {
+            for (let x = 1; x < width - 1; x++) {
+                for (let c = 0; c < 3; c++) {
+                    let sum = 0;
+                    for (let ky = -1; ky <= 1; ky++) {
+                        for (let kx = -1; kx <= 1; kx++) {
+                            const pixelIndex = ((y + ky) * width + (x + kx)) * 4 + c;
+                            sum += data[pixelIndex] * kernel[ky + 1][kx + 1];
+                        }
+                    }
+                    const index = (y * width + x) * 4 + c;
+                    sharpenedData[index] = Math.min(255, Math.max(0, sum));
+                }
+            }
+        }
+        
+        // Copy sharpened data back
+        for (let i = 0; i < data.length; i += 4) {
+            data[i] = sharpenedData[i];
+            data[i + 1] = sharpenedData[i + 1];
+            data[i + 2] = sharpenedData[i + 2];
+        }
     }
 
     // Create thumbnail card
-    function createThumbnailCard(size, imageBlob, videoId, isEnhanced) {
+    function createThumbnailCard(size, imageBlob, videoId) {
         const grid = document.getElementById('ytp-thumbnails-grid');
         if (!grid) return;
 
@@ -667,8 +654,8 @@
         qualityText.textContent = size.name;
         
         const badge = document.createElement('span');
-        badge.className = `ytp-quality-badge ${size.ultra ? 'ytp-ultra' : size.pro ? 'ytp-pro' : ''}`;
-        badge.textContent = size.ultra ? 'ULTRA' : size.pro ? 'PRO' : 'STD';
+        badge.className = `ytp-quality-badge ${size.pro ? 'ytp-pro' : ''}`;
+        badge.textContent = size.pro ? 'PRO' : 'STD';
         
         quality.appendChild(qualityText);
         quality.appendChild(badge);
@@ -677,25 +664,21 @@
         resolution.className = 'ytp-thumbnail-resolution';
         resolution.textContent = `${size.width} × ${size.height} pixels`;
 
-        // Enhancement indicators
-        if (isEnhanced && size.pro) {
+        // Enhancement indicators for Pro versions
+        if (size.pro) {
             const enhancements = document.createElement('div');
             enhancements.innerHTML = `
                 <div class="ytp-enhancement-indicator">✨ Black Bars Removed</div>
                 <div class="ytp-enhancement-indicator">🚀 8K Enhanced</div>
                 <div class="ytp-enhancement-indicator">⚡ Sharpness Boost</div>
-                <div class="ytp-enhancement-indicator">🎨 Color Enhancement</div>
+                <div class="ytp-enhancement-indicator">🎨 Color Enhanced</div>
             `;
             info.appendChild(enhancements);
-        } else if (isEnhanced) {
-            const enhancement = document.createElement('div');
-            enhancement.innerHTML = '<div class="ytp-enhancement-indicator">✨ Black Bars Removed</div>';
-            info.appendChild(enhancement);
         }
 
         const downloadBtn = document.createElement('button');
         downloadBtn.className = `ytp-download-btn ${size.pro ? 'ytp-pro' : ''}`;
-        downloadBtn.textContent = `Download ${size.name}`;
+        downloadBtn.textContent = size.pro ? 'Pro Download' : 'Normal Download';
         downloadBtn.onclick = () => downloadThumbnail(imageBlob, `YouTube_Thumbnail_${videoId}_${size.name.replace(/\s+/g, '_')}.jpg`);
 
         info.appendChild(quality);
@@ -819,194 +802,6 @@
         }, 3000);
     }
 
-    // Keyboard shortcuts
-    document.addEventListener('keydown', function(e) {
-        // Ctrl/Cmd + Enter to extract thumbnails
-        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-            e.preventDefault();
-            ytpExtractThumbnails();
-        }
-        
-        // Escape to close mobile menu
-        if (e.key === 'Escape') {
-            const mobileMenu = document.getElementById('mobile-menu');
-            if (mobileMenu && mobileMenu.classList.contains('active')) {
-                toggleMobileMenu();
-            }
-        }
-    });
-
-    // Performance monitoring
-    if (typeof PerformanceObserver !== 'undefined') {
-        const performanceObserver = new PerformanceObserver((list) => {
-            for (const entry of list.getEntries()) {
-                if (entry.entryType === 'measure') {
-                    console.log(`Performance: ${entry.name} took ${entry.duration.toFixed(2)}ms`);
-                }
-            }
-        });
-        
-        try {
-            performanceObserver.observe({ entryTypes: ['measure'] });
-        } catch (e) {
-            console.log('Performance Observer not supported');
-        }
-    }
-
-    // Utility function to measure performance
-    function measurePerformance(name, fn) {
-        return async function(...args) {
-            const startMark = `${name}-start`;
-            const endMark = `${name}-end`;
-            const measureName = `${name}-duration`;
-            
-            performance.mark(startMark);
-            const result = await fn.apply(this, args);
-            performance.mark(endMark);
-            performance.measure(measureName, startMark, endMark);
-            
-            return result;
-        };
-    }
-
-    // Intersection Observer for lazy loading and animations
-    if (typeof IntersectionObserver !== 'undefined') {
-        const observerOptions = {
-            threshold: 0.1,
-            rootMargin: '50px 0px'
-        };
-
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    entry.target.classList.add('ytp-visible');
-                    
-                    // Trigger any lazy loading for images
-                    const images = entry.target.querySelectorAll('img[data-src]');
-                    images.forEach(img => {
-                        img.src = img.dataset.src;
-                        img.removeAttribute('data-src');
-                    });
-                }
-            });
-        }, observerOptions);
-
-        // Observe elements when DOM is ready
-        setTimeout(() => {
-            document.querySelectorAll('.ytp-feature-card, .ytp-tool-card, .ytp-seo-content').forEach(el => {
-                observer.observe(el);
-            });
-        }, 100);
-    }
-
-    // Image optimization utilities
-    function optimizeImageForDownload(canvas, quality = 0.95) {
-        return new Promise((resolve) => {
-            canvas.toBlob(resolve, 'image/jpeg', quality);
-        });
-    }
-
-    // Batch processing for multiple thumbnails
-    async function processBatchThumbnails(videoIds) {
-        const results = [];
-        for (const videoId of videoIds) {
-            try {
-                const result = await processThumbnails(videoId);
-                results.push({ videoId, success: true, result });
-            } catch (error) {
-                results.push({ videoId, success: false, error: error.message });
-            }
-        }
-        return results;
-    }
-
-    // Advanced color analysis for better enhancement
-    function analyzeImageColors(imageData) {
-        const data = imageData.data;
-        let totalBrightness = 0;
-        let totalContrast = 0;
-        let pixelCount = 0;
-
-        for (let i = 0; i < data.length; i += 4) {
-            const r = data[i];
-            const g = data[i + 1];
-            const b = data[i + 2];
-            
-            // Calculate brightness (luminance)
-            const brightness = (0.299 * r + 0.587 * g + 0.114 * b);
-            totalBrightness += brightness;
-            pixelCount++;
-        }
-
-        const averageBrightness = totalBrightness / pixelCount;
-        
-        return {
-            averageBrightness,
-            needsBrightnessBoost: averageBrightness < 100,
-            needsContrastBoost: averageBrightness > 50 && averageBrightness < 200
-        };
-    }
-
-    // Adaptive enhancement based on image analysis
-    function adaptiveImageEnhancement(ctx, width, height) {
-        const imageData = ctx.getImageData(0, 0, width, height);
-        const analysis = analyzeImageColors(imageData);
-        const data = imageData.data;
-
-        const brightnessMultiplier = analysis.needsBrightnessBoost ? 1.2 : 1.05;
-        const contrastMultiplier = analysis.needsContrastBoost ? 1.15 : 1.1;
-
-        for (let i = 0; i < data.length; i += 4) {
-            let r = data[i];
-            let g = data[i + 1];
-            let b = data[i + 2];
-
-            // Adaptive brightness
-            r = Math.min(255, r * brightnessMultiplier);
-            g = Math.min(255, g * brightnessMultiplier);
-            b = Math.min(255, b * brightnessMultiplier);
-
-            // Adaptive contrast
-            r = Math.min(255, Math.max(0, ((r - 128) * contrastMultiplier) + 128));
-            g = Math.min(255, Math.max(0, ((g - 128) * contrastMultiplier) + 128));
-            b = Math.min(255, Math.max(0, ((b - 128) * contrastMultiplier) + 128));
-
-            data[i] = Math.round(r);
-            data[i + 1] = Math.round(g);
-            data[i + 2] = Math.round(b);
-        }
-
-        ctx.putImageData(imageData, 0, 0);
-    }
-
-    // Error handling and retry mechanism
-    async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
-        for (let i = 0; i < maxRetries; i++) {
-            try {
-                return await fn();
-            } catch (error) {
-                if (i === maxRetries - 1) throw error;
-                
-                const delay = baseDelay * Math.pow(2, i);
-                await new Promise(resolve => setTimeout(resolve, delay));
-                console.log(`Retry attempt ${i + 1} after ${delay}ms delay`);
-            }
-        }
-    }
-
-    // Service Worker registration for offline support (if available)
-    if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js')
-                .then(registration => {
-                    console.log('SW registered: ', registration);
-                })
-                .catch(registrationError => {
-                    console.log('SW registration failed: ', registrationError);
-                });
-        });
-    }
-
     // Cleanup function for memory management
     function cleanup() {
         // Clean up canvas contexts
@@ -1031,17 +826,22 @@
     // Auto cleanup on page unload
     window.addEventListener('beforeunload', cleanup);
 
-    // Responsive image sizing
-    function getOptimalThumbnailSize() {
-        const screenWidth = window.innerWidth;
-        const screenHeight = window.innerHeight;
+    // Keyboard shortcuts
+    document.addEventListener('keydown', function(e) {
+        // Ctrl/Cmd + Enter to extract thumbnails
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            ytpExtractThumbnails();
+        }
         
-        if (screenWidth >= 3840) return { width: 7680, height: 4320 }; // 8K for 4K+ screens
-        if (screenWidth >= 2560) return { width: 3840, height: 2160 }; // 4K for QHD+ screens
-        if (screenWidth >= 1920) return { width: 2560, height: 1440 }; // 2K for FHD+ screens
-        if (screenWidth >= 1280) return { width: 1920, height: 1080 }; // FHD for HD+ screens
-        return { width: 1280, height: 720 }; // HD for smaller screens
-    }
+        // Escape to close mobile menu
+        if (e.key === 'Escape') {
+            const mobileMenu = document.getElementById('mobile-menu');
+            if (mobileMenu && mobileMenu.classList.contains('active')) {
+                toggleMobileMenu();
+            }
+        }
+    });
 
     // Export functions for external use
     window.YTThumbnailDownloader = {
@@ -1056,52 +856,6 @@
         scrollToSection: window.scrollToSection
     };
 
-    // Debug mode
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-        window.YTThumbnailDownloader.debug = {
-            processingCanvas,
-            tempCanvas,
-            enhanceImage,
-            removeBlackBars,
-            applyImageEnhancements,
-            analyzeImageColors
-        };
-        console.log('Debug mode enabled. Access debug functions via window.YTThumbnailDownloader.debug');
-    }
-
-    // Initialize analytics (replace with your actual analytics)
-    function initAnalytics() {
-        // Track thumbnail downloads
-        const originalDownloadThumbnail = downloadThumbnail;
-        window.downloadThumbnail = function(blob, filename) {
-            // Analytics tracking code here
-            if (typeof gtag !== 'undefined') {
-                gtag('event', 'download', {
-                    event_category: 'thumbnail',
-                    event_label: filename,
-                    value: 1
-                });
-            }
-            return originalDownloadThumbnail(blob, filename);
-        };
-
-        // Track thumbnail extractions
-        const originalExtractThumbnails = ytpExtractThumbnails;
-        window.ytpExtractThumbnails = function() {
-            if (typeof gtag !== 'undefined') {
-                gtag('event', 'extract_thumbnails', {
-                    event_category: 'engagement',
-                    event_label: 'thumbnail_extraction',
-                    value: 1
-                });
-            }
-            return originalExtractThumbnails();
-        };
-    }
-
-    // Initialize analytics on load
-    setTimeout(initAnalytics, 2000);
-
     // Console welcome message
     console.log(`
     🚀 YouTube Thumbnail Downloader Pro v2025.1.0
@@ -1110,17 +864,18 @@
     Features loaded:
     ✅ 8K Ultra HD Enhancement
     ✅ Smart Black Bar Removal
-    ✅ AI Image Processing
+    ✅ Pro Image Processing
     ✅ Responsive Design
     ✅ Dark Mode Support
     ✅ Performance Optimization
     
-    For support: https://github.com/YTThumbnailPro
+    8K Upscaling: Enhanced Pro versions (144p-8K)
+    Normal Mode: Standard versions (144p-1080p)
     `);
 
 })();
 
-// Additional utility functions outside the main scope
+// Additional utility functions
 function debounce(func, wait, immediate) {
     let timeout;
     return function executedFunction(...args) {
